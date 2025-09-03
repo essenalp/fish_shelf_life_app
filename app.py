@@ -1,53 +1,47 @@
 import streamlit as st
 import joblib
 import pandas as pd
+import os
 
-st.title("Raf Ömrü Tahmin Uygulaması (Simülasyon Verisi ile)")
-st.write("Balık türü ve depolama sıcaklığı girerek kalan raf ömrünü tahmin edebilirsiniz.")
+st.title("Raf Ömrü Tahmin Uygulaması")
+st.write("Balık türü, sıcaklık ve geçen süre bilgisi girerek kalan raf ömrünü tahmin edebilirsiniz.")
 
 # Kullanıcı girişi
 species = st.selectbox("Balık Türü", ["Somon", "Levrek"])
-temp = st.number_input("Depolama Sıcaklığı (°C)", min_value=0, max_value=12, value=4, step=1)
+temp = st.number_input("Depolama Sıcaklığı (°C)", min_value=0.0, max_value=20.0, value=4.0, step=0.5)
 hours = st.number_input("Kaç saat geçti?", min_value=0, max_value=240, value=24, step=1)
 model_choice = st.radio("Model Seçimi", ["Random Forest", "XGBoost"])
 
+# Model klasörü yolu
+MODEL_DIR = "models"
+
+def load_model(model_name):
+    model_path = os.path.join(MODEL_DIR, model_name)
+    if not os.path.exists(model_path):
+        st.error(f"Model dosyası bulunamadı: {model_path}")
+        return None
+    return joblib.load(model_path)
+
 if st.button("Tahmin Et"):
     try:
-        # Model seçimi
         if model_choice == "Random Forest":
-            model = joblib.load("models/rf_model_app.joblib")
+            model = load_model("rf_model_app.joblib")
         else:
-            model = joblib.load("models/xgb_model_app.joblib")
+            model = load_model("xgb_model_app.joblib")
 
-        # Model feature'ları
-        model_features = model.feature_names_in_
+        if model is not None:
+            # Simülasyon verisine uygun encoding
+            input_df = pd.DataFrame({
+                "hours_0C": [hours if temp == 0 else 0],
+                "hours_4C": [hours if temp == 4 else 0],
+                "hours_8C": [hours if temp == 8 else 0],
+                "hours_12C": [hours if temp == 12 else 0],
+                "species_Somon": [1 if species == "Somon" else 0],
+                "species_Levrek": [1 if species == "Levrek" else 0],
+            })
 
-        # Input DataFrame'i sıfırlarla başlat
-        input_dict = {feat: [0] for feat in model_features}
+            prediction = model.predict(input_df)[0]
+            st.success(f"Tahmini kalan raf ömrü: {prediction:.1f} saat")
 
-        # Tür encoding
-        if species == "Somon":
-            if "species_Somon" in input_dict:
-                input_dict["species_Somon"][0] = 1
-        elif species == "Levrek":
-            if "species_Levrek" in input_dict:
-                input_dict["species_Levrek"][0] = 1
-
-        # Saat bilgisini ilgili sıcaklık feature'ına ata
-        temp_column = f"hours_{temp}C"
-        if temp_column in input_dict:
-            input_dict[temp_column][0] = hours
-        else:
-            st.error(f"Modelde bu sıcaklık feature'ı yok: {temp_column}")
-
-        # DataFrame oluştur
-        input_df = pd.DataFrame(input_dict)
-
-        # Tahmin
-        prediction = model.predict(input_df)[0]
-        st.success(f"Tahmini kalan raf ömrü: {prediction:.1f} saat")
-
-    except FileNotFoundError:
-        st.error("Seçilen model dosyası bulunamadı. Lütfen modeli 'models' klasörüne kaydedin.")
     except Exception as e:
         st.error(f"Tahmin sırasında bir hata oluştu: {e}")
