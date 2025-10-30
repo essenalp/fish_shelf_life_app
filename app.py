@@ -1,32 +1,34 @@
 import streamlit as st
-import joblib
 import pandas as pd
 import numpy as np
+import joblib
 import os
-import re
 
-st.title("Raf Ömrü Tahmin Uygulaması")
-st.write("Balık türü, sıcaklık ve geçen süre bilgisi girerek kalan raf ömrünü tahmin edebilirsiniz.")
+st.set_page_config(page_title="Balık Raf Ömrü Tahmin Uygulaması", layout="centered")
+st.title("🐟 Balık Raf Ömrü Tahmin Uygulaması")
+st.write("Balığın depolama koşullarına göre tahmini kalan raf ömrünü hesaplayabilirsiniz.")
 
-# ---- Kullanıcı girişleri ----
+# ---- Kullanıcı Girdileri ----
+st.header("Tahmin İçin Gerekli Bilgiler")
+
 species = st.selectbox("Balık Türü", ["Somon", "Levrek"])
-temp = st.selectbox("Depolama Sıcaklığı (°C)", [0, 4, 8, 12])   # MODELE UYGUN seviyeler
-hours = st.number_input("Kaç saat geçti?", min_value=0, max_value=240, value=24, step=1)
+hours = st.number_input("Depolama süresi (saat)", min_value=0, max_value=240, value=24, step=1)
+temp = st.selectbox("Depolama sıcaklığı (°C)", [0, 4, 8, 12])
+days_elapsed = st.number_input("Hasattan itibaren geçen süre (gün)", min_value=0, max_value=30, value=0, step=1)
+avg_temp_post_harvest = st.selectbox("Hasat sonrası ortalama depolama sıcaklığı (°C)", [0, 4, 8, 12])
 model_choice = st.radio("Model Seçimi", ["Random Forest", "XGBoost"])
 
 # ---- Model dosya yolunu çöz ----
 def resolve_model_path(choice: str) -> str:
     fname = "rf_model_app.joblib" if choice == "Random Forest" else "xgb_model_app.joblib"
-    # Önce 'models/', yoksa 'Models/' dene
     paths = [os.path.join("models", fname), os.path.join("Models", fname)]
     for p in paths:
         if os.path.exists(p):
             return p
-    # Hiçbiri yoksa ilkini döndür (hata mesajı için)
     return paths[0]
 
-# ---- Tahmin butonu ----
-if st.button("Tahmin Et"):
+# ---- Tahmin Butonu ----
+if st.button("Tahmini Raf Ömrünü Hesapla"):
     try:
         model_path = resolve_model_path(model_choice)
         if not os.path.exists(model_path):
@@ -34,46 +36,31 @@ if st.button("Tahmin Et"):
         else:
             model = joblib.load(model_path)
 
-            # Modelin beklediği özellik adlarını tespit et
+            # Modelin beklediği kolonlar
             if hasattr(model, "feature_names_in_"):
                 expected_features = list(model.feature_names_in_)
             else:
-                # Yedek plan: en yaygın iki senaryodan birini dene
-                candidate1 = ["hours_8C", "hours_12C", "species_Somon", "species_Levrek"]
-                candidate2 = ["hours_0C", "hours_4C", "hours_8C", "hours_12C", "species_Somon", "species_Levrek"]
-                nfi = getattr(model, "n_features_in_", None)
-                if nfi == len(candidate1):
-                    expected_features = candidate1
-                else:
-                    expected_features = candidate2
+                expected_features = ["total_hours","avg_temp_post_harvest","species_Somon","species_Levrek"]
 
-            # Kullanıcı girdisini tam olarak modelin beklediği kolon setine çevir
+            # Kullanıcı girdilerini DataFrame formatına çevir
+            total_hours = hours + days_elapsed * 24
             row = {col: 0 for col in expected_features}
+            row['total_hours'] = total_hours
 
-            # Saat kolonları: model hangi "hours_*C" kolonlarını bekliyorsa onlara dağıt
-            hour_cols = [c for c in expected_features if re.match(r"^hours_\d+C$", c)]
-            target_col = f"hours_{temp}C"
-            if target_col in hour_cols:
-                row[target_col] = hours
-            else:
-                # Modelin saat kolonları arasında temp yoksa (ör. sadece 8C,12C varken 4C seçildiyse)
-                # bu durumda saatleri hiçbirine yazmıyoruz (0 kalır). Bu, modelin eğitim kurgusuna uygundur.
-                pass
+            # Sıcaklık tercihi: hasat sonrası ortalama sıcaklık öne alınır
+            if 'avg_temp_post_harvest' in expected_features:
+                row['avg_temp_post_harvest'] = avg_temp_post_harvest if avg_temp_post_harvest is not None else temp
 
-            # Tür kolonları: varsa onları işaretle
             sp_col = f"species_{species}"
             if sp_col in expected_features:
                 row[sp_col] = 1
-            # Diğer tür sütunları varsa 0 kalacak.
 
-            # DataFrame'i tam beklenen sırada oluştur
             X_input = pd.DataFrame([[row[c] for c in expected_features]], columns=expected_features)
 
-            # Debug amaçlı (gerekirse açarsın)
-            # st.write("Modelin beklediği kolonlar:", expected_features)
-            # st.write("Gönderilen satır:", X_input)
-
+            # Tahmin
             pred = model.predict(X_input)[0]
             st.success(f"Tahmini kalan raf ömrü: {pred:.1f} saat")
+            st.info(f"Toplam geçen süre: {total_hours:.1f} saat (Depolama + Hasattan geçen günler)")
+
     except Exception as e:
-        st.error(f"Tahmin sırasında bir hata oluştu: {e}")
+        st.error(f"Hata oluştu: {e}")
